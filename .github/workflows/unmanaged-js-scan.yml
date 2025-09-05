@@ -23,78 +23,31 @@ jobs:
     - name: 🔧 Install application dependencies
       run: npm install
       
-    - name: 🛠️ Install Snyk Unmanaged JS Scanner
+    - name: 🛠️ Install retire.js scanner
       run: |
-        # For demo purposes - installing retire.js directly
-        # In production, you would install: npm install -g snyk-unmanaged-js-scanner
+        # Install retire.js directly for vulnerability scanning
         npm install -g retire
-        
-        # Create a simple wrapper script for the demo
-        cat > /usr/local/bin/snyk-unmanaged-scanner << 'EOF'
-        #!/bin/bash
-        
-        # Simple wrapper around retire.js for demo purposes
-        # In production, this would be the full snyk-unmanaged-scanner tool
-        
-        SCAN_PATH="$1"
-        OUTPUT_FORMAT=""
-        OUTPUT_FILE=""
-        SEVERITY=""
-        IGNORE=""
-        
-        # Parse arguments (simplified for demo)
-        while [[ $# -gt 0 ]]; do
-          case $1 in
-            --output)
-              OUTPUT_FORMAT="$2"
-              shift 2
-              ;;
-            --output-file)
-              OUTPUT_FILE="$2"
-              shift 2
-              ;;
-            --fail-on)
-              SEVERITY="$2"
-              shift 2
-              ;;
-            --ignore)
-              IGNORE="$2"
-              shift 2
-              ;;
-            --*)
-              # Skip other options
-              shift 2
-              ;;
-            *)
-              if [ -z "$SCAN_PATH" ]; then
-                SCAN_PATH="$1"
-              fi
-              shift
-              ;;
-          esac
-        done
-        
+
+    - name: 🔍 Scan for vulnerable unmanaged JavaScript libraries
+      id: scan
+      run: |
+        echo "🎯 Scanning for unmanaged JavaScript vulnerabilities..."
         echo "🔍 Snyk Unmanaged JavaScript Library Scanner (Demo Mode)"
-        echo "Scanning: $SCAN_PATH"
+        echo "Scanning: $(pwd)"
         echo ""
         
-        # Run retire.js scan
-        RETIRE_ARGS="--path $SCAN_PATH --outputformat json"
-        if [ -n "$IGNORE" ]; then
-          RETIRE_ARGS="$RETIRE_ARGS --ignore $IGNORE"
-        fi
+        # Run retire.js scan directly
+        retire --path . --outputformat json --ignore node_modules,dist,build,.git > unmanaged-vulnerabilities.json 2>/dev/null || true
         
-        retire $RETIRE_ARGS > scan_results.json 2>/dev/null || true
-        
-        # Display results
-        if [ -f "scan_results.json" ] && [ -s "scan_results.json" ]; then
+        # Check if scan found anything
+        if [ -f "unmanaged-vulnerabilities.json" ] && [ -s "unmanaged-vulnerabilities.json" ]; then
           echo "📋 SCAN SUMMARY"
           echo "──────────────────────────────────────────────────"
           
-          # Parse JSON results and display summary
-          FILES=$(cat scan_results.json | jq -r '.data | length' 2>/dev/null || echo "0")
-          VULNS=$(cat scan_results.json | jq -r '[.data[].results[]?.vulnerabilities[]?] | length' 2>/dev/null || echo "0")
-          LIBS=$(cat scan_results.json | jq -r '[.data[].results[]?.component] | unique | length' 2>/dev/null || echo "0")
+          # Parse results
+          FILES=$(cat unmanaged-vulnerabilities.json | jq -r '.data | length' 2>/dev/null || echo "0")
+          VULNS=$(cat unmanaged-vulnerabilities.json | jq -r '[.data[].results[]?.vulnerabilities[]?] | length' 2>/dev/null || echo "0")
+          LIBS=$(cat unmanaged-vulnerabilities.json | jq -r '[.data[].results[]?.component] | unique | length' 2>/dev/null || echo "0")
           
           echo "📁 Files scanned: $FILES"
           echo "🔍 Libraries detected: $LIBS" 
@@ -104,53 +57,32 @@ jobs:
           if [ "$VULNS" -gt 0 ]; then
             echo "🚨 VULNERABILITY DETAILS"
             echo "────────────────────────────────────────────────────────────────────────────────"
-            cat scan_results.json | jq -r '
+            
+            # Show first few vulnerabilities as examples
+            cat unmanaged-vulnerabilities.json | jq -r '
               .data[] | 
               select(.results | length > 0) |
-              "📄 " + .file,
+              "📄 " + (.file | split("/") | last),
               (.results[] | 
                 select(.vulnerabilities | length > 0) |
-                "  📦 " + (.component // .npmname) + " v" + .version,
-                (.vulnerabilities[] | 
+                "  📦 " + (.component // .npmname) + " v" + .version + " (" + ((.vulnerabilities | length) | tostring) + " vulnerabilities)",
+                (.vulnerabilities[0:3][] | 
                   "    [" + (.severity | ascii_upcase) + "] " + (.identifiers.summary // "Vulnerability found")
-                )
+                ),
+                if (.vulnerabilities | length) > 3 then "    ... and " + (((.vulnerabilities | length) - 3) | tostring) + " more vulnerabilities" else empty end
               )
             ' 2>/dev/null || echo "Error parsing vulnerability details"
-          fi
-          
-          # Save formatted output if requested
-          if [ -n "$OUTPUT_FILE" ]; then
-            cp scan_results.json "$OUTPUT_FILE"
+            
             echo ""
-            echo "💾 Results saved to: $OUTPUT_FILE"
-          fi
-          
-          # Exit with error code if vulnerabilities found
-          if [ "$VULNS" -gt 0 ]; then
-            echo ""
-            echo "❌ Found $VULNS vulnerabilities in unmanaged JavaScript libraries"
-            exit 1
+            echo "❌ Found $VULNS vulnerabilities in unmanaged JavaScript libraries!"
+            echo "💡 These libraries are embedded in source code and missed by traditional scans"
+          else
+            echo "✅ No vulnerabilities detected"
           fi
         else
-          echo "✅ No vulnerabilities found or no JavaScript files detected"
+          echo "❌ No scan results generated - check retire.js execution"
+          exit 1
         fi
-        EOF
-        
-        chmod +x /usr/local/bin/snyk-unmanaged-scanner
-
-    - name: 🔍 Scan for vulnerable unmanaged JavaScript libraries
-      id: scan
-      run: |
-        echo "🎯 Scanning for unmanaged JavaScript vulnerabilities..."
-        
-        # Run the scanner with detailed output
-        snyk-unmanaged-scanner . \
-          --output both \
-          --output-file unmanaged-vulnerabilities.json \
-          --fail-on medium \
-          --ignore node_modules,dist,build,.git \
-          --extensions js,jsx,ts,tsx \
-          --include-low-severity
       continue-on-error: true # Continue to show results even if vulnerabilities found
 
     - name: 📊 Display scan summary
