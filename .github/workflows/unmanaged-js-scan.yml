@@ -111,7 +111,44 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           echo "### 📚 Libraries Detected" >> $GITHUB_STEP_SUMMARY
-          cat unmanaged-vulnerabilities.json | jq -r '.summary.librariesFound[]' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+          
+          # Extract library details with vulnerabilities
+          cat unmanaged-vulnerabilities.json | jq -r '
+            .data[] | 
+            select(.results | length > 0) |
+            .results[] | 
+            select(.vulnerabilities | length > 0) |
+            {
+              name: (.component // .npmname),
+              version: .version,
+              vulnCount: (.vulnerabilities | length),
+              maxSeverity: (
+                .vulnerabilities | 
+                map(.severity) | 
+                if any(. == "critical") then "critical"
+                elif any(. == "high") then "high" 
+                elif any(. == "medium") then "medium"
+                elif any(. == "low") then "low"
+                else "unknown" end
+              ),
+              severityCounts: {
+                critical: [.vulnerabilities[] | select(.severity == "critical")] | length,
+                high: [.vulnerabilities[] | select(.severity == "high")] | length,
+                medium: [.vulnerabilities[] | select(.severity == "medium")] | length,
+                low: [.vulnerabilities[] | select(.severity == "low")] | length
+              }
+            } |
+            "- **" + .name + " v" + .version + "** - " + (.vulnCount | tostring) + " vulnerabilities" +
+            (if .maxSeverity == "critical" then " 🔴" 
+             elif .maxSeverity == "high" then " 🟠"
+             elif .maxSeverity == "medium" then " 🟡" 
+             elif .maxSeverity == "low" then " 🟢"
+             else "" end) +
+            " (Critical:" + (.severityCounts.critical | tostring) + 
+            ", High:" + (.severityCounts.high | tostring) + 
+            ", Medium:" + (.severityCounts.medium | tostring) + 
+            ", Low:" + (.severityCounts.low | tostring) + ")"
+          ' 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "- Error parsing library details" >> $GITHUB_STEP_SUMMARY
         else
           echo "❌ No results file generated" >> $GITHUB_STEP_SUMMARY
         fi
