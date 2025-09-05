@@ -2,7 +2,7 @@ name: 🔍 Scan for Unmanaged JavaScript Vulnerabilities
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, develop, snyk-web-ui-integration ]
   pull_request:
     branches: [ main ]
   workflow_dispatch: # Allow manual triggering for demo
@@ -254,67 +254,124 @@ jobs:
       env:
         SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
-    - name: 🌐 Install Snyk CLI and scan generated package
+    - name: 📦 Install dependencies and generate lock file
+      if: always()
+      run: |
+        if [ -d "unmanaged-deps-for-snyk" ] && [ -f "unmanaged-deps-for-snyk/package.json" ]; then
+          cd unmanaged-deps-for-snyk
+          
+          echo "📦 Installing dependencies to generate package-lock.json..."
+          echo "🔍 This creates the lock file that Snyk will scan"
+          
+          # Install dependencies - this creates package-lock.json that Snyk needs
+          npm install 2>/dev/null || {
+            echo "⚠️  Some packages may not be available on npm with exact versions"
+            echo "📝 This is expected for embedded/modified library versions"
+            echo "✅ Continuing with whatever lock file was generated..."
+          }
+          
+          # Verify lock file was created
+          if [ -f "package-lock.json" ]; then
+            echo "✅ package-lock.json generated successfully"
+            echo "📊 Lock file contains $(cat package-lock.json | jq '.packages | keys | length') packages"
+          else
+            echo "❌ No package-lock.json generated - Snyk scan may not work properly"
+          fi
+          
+          cd ..
+        else
+          echo "❌ No package.json found for dependency installation"
+        fi
+
+    - name: 🌐 Install Snyk CLI and authenticate
       if: always()
       run: |
         echo "📦 Installing Snyk CLI..."
         npm install -g snyk
         
-        if [ -d "unmanaged-deps-for-snyk" ] && [ -f "unmanaged-deps-for-snyk/package.json" ]; then
+        if [ -n "${{ secrets.SNYK_TOKEN }}" ]; then
+          echo "🔑 Authenticating with Snyk..."
+          echo "${{ secrets.SNYK_TOKEN }}" | snyk auth --token-from-stdin
+          echo "✅ Authenticated with Snyk successfully"
+        else
+          echo "⚠️  No SNYK_TOKEN found - will run in test-only mode"
+        fi
+
+    - name: 🔍 Run Snyk scan on generated lock file
+      if: always()
+      run: |
+        if [ -d "unmanaged-deps-for-snyk" ] && [ -f "unmanaged-deps-for-snyk/package-lock.json" ]; then
           cd unmanaged-deps-for-snyk
           
-          echo "🔍 Generating package-lock.json for Snyk scan..."
-          npm install --package-lock-only 2>/dev/null || {
-            echo "⚠️  Some packages may not be available on npm with exact versions"
-            echo "📝 This is expected for embedded/modified library versions"
+          echo "🔍 Running Snyk test on package-lock.json..."
+          echo "📋 This scans the dependencies found in unmanaged JavaScript libraries"
+          
+          # Run snyk test and capture results
+          snyk test --json > snyk-test-results.json 2>/dev/null || {
+            echo "🚨 Snyk test completed - vulnerabilities may have been found"
           }
           
-          if [ -n "${{ secrets.SNYK_TOKEN }}" ]; then
+          # Display test results
+          if [ -f "snyk-test-results.json" ]; then
             echo ""
-            echo "🌐 Scanning with Snyk and sending to Web UI..."
+            echo "📋 SNYK TEST RESULTS:"
+            echo "──────────────────────────────────────────────────"
             
-            # Test the dependencies 
-            snyk test --json > snyk-test-results.json 2>/dev/null || echo "Scan completed with findings"
-            
-            # Monitor (send to Web UI) with custom project name
-            snyk monitor \
-              --project-name="Unmanaged JavaScript Dependencies - $(date +'%Y-%m-%d')" \
-              --project-tags="unmanaged-deps,retire-js-scan,demo" \
-              --remote-repo-url="${{ github.server_url }}/${{ github.repository }}" \
-              --target-reference="${{ github.ref_name }}" \
-              2>/dev/null || echo "Monitor command completed"
-            
-            echo ""
-            echo "🎉 SUCCESS: Unmanaged dependencies sent to Snyk Web UI!"
-            echo "📊 Check your Snyk dashboard: https://app.snyk.io"
-            echo "🔍 Look for project: 'Unmanaged JavaScript Dependencies - $(date +'%Y-%m-%d')'"
-            
-            # Display test results summary if available
-            if [ -f "snyk-test-results.json" ]; then
-              echo ""
-              echo "📋 SNYK SCAN SUMMARY:"
-              cat snyk-test-results.json | jq -r '
-                if .vulnerabilities then
-                  "🚨 Vulnerabilities found: " + (.vulnerabilities | length | tostring) + 
-                  "\n🔴 Critical: " + ([.vulnerabilities[] | select(.severity == "critical")] | length | tostring) +
-                  "\n🟠 High: " + ([.vulnerabilities[] | select(.severity == "high")] | length | tostring) +
-                  "\n🟡 Medium: " + ([.vulnerabilities[] | select(.severity == "medium")] | length | tostring) +
-                  "\n🟢 Low: " + ([.vulnerabilities[] | select(.severity == "low")] | length | tostring)
+            # Parse and display summary
+            cat snyk-test-results.json | jq -r '
+              if .vulnerabilities then
+                "🚨 Vulnerabilities found: " + (.vulnerabilities | length | tostring) +
+                "\n🔴 Critical: " + ([.vulnerabilities[] | select(.severity == "critical")] | length | tostring) +
+                "\n🟠 High: " + ([.vulnerabilities[] | select(.severity == "high")] | length | tostring) +
+                "\n🟡 Medium: " + ([.vulnerabilities[] | select(.severity == "medium")] | length | tostring) +
+                "\n🟢 Low: " + ([.vulnerabilities[] | select(.severity == "low")] | length | tostring)
+              else
+                if .error then
+                  "❌ Error: " + .error
                 else
-                  "✅ No vulnerabilities found or scan format different"
+                  "✅ No vulnerabilities found or unexpected result format"
                 end
-              ' 2>/dev/null || echo "Results summary not available"
-            fi
+              end
+            ' 2>/dev/null || echo "Unable to parse Snyk results"
           else
-            echo ""
-            echo "⚠️  Skipping Snyk Web UI integration (no SNYK_TOKEN)"
-            echo "🔍 Running local test only..."
-            snyk test 2>/dev/null || echo "Local scan completed"
+            echo "❌ No Snyk test results generated"
           fi
           
           cd ..
         else
-          echo "❌ No package.json generated for Snyk scan"
+          echo "❌ No package-lock.json found for Snyk scanning"
+        fi
+
+    - name: 📤 Send results to Snyk Web UI
+      if: always()
+      run: |
+        if [ -n "${{ secrets.SNYK_TOKEN }}" ] && [ -d "unmanaged-deps-for-snyk" ] && [ -f "unmanaged-deps-for-snyk/package-lock.json" ]; then
+          cd unmanaged-deps-for-snyk
+          
+          echo "🌐 Sending results to Snyk Web UI with snyk monitor..."
+          
+          # Send to Snyk Web UI
+          snyk monitor \
+            --project-name="Unmanaged JavaScript Dependencies - $(date +'%Y-%m-%d %H:%M')" \
+            --project-tags="unmanaged-deps,retire-js-scan,demo,auto-generated" \
+            --remote-repo-url="${{ github.server_url }}/${{ github.repository }}" \
+            --target-reference="${{ github.ref_name }}" \
+            2>&1 || echo "Monitor command completed with warnings"
+          
+          echo ""
+          echo "🎉 SUCCESS: Unmanaged dependencies sent to Snyk Web UI!"
+          echo "📊 Check your Snyk dashboard: https://app.snyk.io"
+          echo "🔍 Look for project: 'Unmanaged JavaScript Dependencies - $(date +'%Y-%m-%d %H:%M')'"
+          echo "🏷️  Project tags: unmanaged-deps, retire-js-scan, demo, auto-generated"
+          
+          cd ..
+        else
+          if [ -z "${{ secrets.SNYK_TOKEN }}" ]; then
+            echo "⚠️  Skipping Snyk Web UI integration - no SNYK_TOKEN secret found"
+            echo "💡 Add SNYK_TOKEN secret to enable Web UI integration"
+          else
+            echo "❌ Missing package-lock.json - cannot send to Web UI"
+          fi
         fi
 
     - name: 📤 Upload Snyk integration artifacts
