@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Customer Web Application</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Customer Web Application</h1>
+            <p>Demo application showing unmanaged JavaScript dependencies</p>
+        </header>
+        
+        <main>
+            <section class="dashboard">
+                <h2>Dashboard</h2>
+                <div id="user-data"></div>
+                <div id="charts"></div>
+            </section>
+            
+            <section class="actions">
+                <button id="load-data">Load Data</button>
+                <button id="generate-report">Generate Report</button>
+                <button id="export-data">Export Data</button>
+            </section>
+        </main>
+    </div>
+
+    <!-- These JavaScript files contain UNMANAGED vulnerable libraries -->
+    <!-- The development team copied these libraries directly into the codebase -->
+    <script src="js/vendor-libs.js"></script>
+    <script src="js/chart-utils.js"></script>
+    <script src="js/app-main.js"></script>
+</body>
+</html>

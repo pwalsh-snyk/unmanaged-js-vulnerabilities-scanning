@@ -1,0 +1,178 @@
+name: 🔍 Scan for Unmanaged JavaScript Vulnerabilities
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch: # Allow manual triggering for demo
+
+jobs:
+  scan-unmanaged-js:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout repository
+      uses: actions/checkout@v4
+
+    - name: 🟢 Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: 🔧 Install application dependencies
+      run: npm install
+      
+    - name: 🛠️ Install Snyk Unmanaged JS Scanner
+      run: |
+        # In a real scenario, this would be published to npm
+        # For demo, we'll install directly from GitHub
+        npm install -g git+https://github.com/your-org/snyk-unmanaged-js-scanner.git
+        
+        # Alternative: If published to npm registry
+        # npm install -g snyk-unmanaged-js-scanner
+
+    - name: 🔍 Scan for vulnerable unmanaged JavaScript libraries
+      id: scan
+      run: |
+        echo "🎯 Scanning for unmanaged JavaScript vulnerabilities..."
+        
+        # Run the scanner with detailed output
+        snyk-unmanaged-scanner . \
+          --output both \
+          --output-file unmanaged-vulnerabilities.json \
+          --fail-on medium \
+          --ignore node_modules,dist,build,.git \
+          --extensions js,jsx,ts,tsx \
+          --include-low-severity
+      continue-on-error: true # Continue to show results even if vulnerabilities found
+
+    - name: 📊 Display scan summary
+      if: always()
+      run: |
+        echo "## 📋 Scan Results Summary" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -f "unmanaged-vulnerabilities.json" ]; then
+          TOTAL_FILES=$(cat unmanaged-vulnerabilities.json | jq -r '.summary.totalFiles')
+          VULNERABLE_FILES=$(cat unmanaged-vulnerabilities.json | jq -r '.summary.vulnerableFiles') 
+          TOTAL_VULNS=$(cat unmanaged-vulnerabilities.json | jq -r '.summary.totalVulnerabilities')
+          CRITICAL=$(cat unmanaged-vulnerabilities.json | jq -r '.summary.severityCounts.critical')
+          HIGH=$(cat unmanaged-vulnerabilities.json | jq -r '.summary.severityCounts.high')
+          MEDIUM=$(cat unmanaged-vulnerabilities.json | jq -r '.summary.severityCounts.medium')
+          LOW=$(cat unmanaged-vulnerabilities.json | jq -r '.summary.severityCounts.low')
+          
+          echo "- **Files scanned:** $TOTAL_FILES" >> $GITHUB_STEP_SUMMARY
+          echo "- **Vulnerable files:** $VULNERABLE_FILES" >> $GITHUB_STEP_SUMMARY  
+          echo "- **Total vulnerabilities:** $TOTAL_VULNS" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🎯 Severity Breakdown" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔴 **Critical:** $CRITICAL" >> $GITHUB_STEP_SUMMARY
+          echo "- 🟠 **High:** $HIGH" >> $GITHUB_STEP_SUMMARY
+          echo "- 🟡 **Medium:** $MEDIUM" >> $GITHUB_STEP_SUMMARY
+          echo "- 🟢 **Low:** $LOW" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 📚 Libraries Detected" >> $GITHUB_STEP_SUMMARY
+          cat unmanaged-vulnerabilities.json | jq -r '.summary.librariesFound[]' | sed 's/^/- /' >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ No results file generated" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: 📤 Upload scan results as artifact
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: unmanaged-js-scan-results
+        path: |
+          unmanaged-vulnerabilities.json
+        retention-days: 30
+
+    - name: 💬 Comment on PR with vulnerability details
+      if: failure() && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          
+          try {
+            const results = JSON.parse(fs.readFileSync('unmanaged-vulnerabilities.json', 'utf8'));
+            
+            let comment = `## 🚨 Unmanaged JavaScript Vulnerabilities Detected
+            
+            The scanner found **${results.summary.totalVulnerabilities} vulnerabilities** in unmanaged JavaScript libraries that are not tracked in \`package.json\`.
+            
+            ### 📊 Summary
+            - **Files scanned:** ${results.summary.totalFiles}
+            - **Vulnerable files:** ${results.summary.vulnerableFiles}
+            - **Total vulnerabilities:** ${results.summary.totalVulnerabilities}
+            
+            ### 🎯 Severity Breakdown
+            | Severity | Count |
+            |----------|--------|
+            | 🔴 Critical | ${results.summary.severityCounts.critical} |
+            | 🟠 High | ${results.summary.severityCounts.high} |
+            | 🟡 Medium | ${results.summary.severityCounts.medium} |
+            | 🟢 Low | ${results.summary.severityCounts.low} |
+            
+            ### 📚 Detected Libraries
+            `;
+            
+            results.summary.librariesFound.forEach(lib => {
+              comment += `- \`${lib}\`\n`;
+            });
+            
+            comment += `
+            ### ⚠️ Security Risk
+            These libraries are embedded directly in your source code and are not managed by package managers. This makes them:
+            - **Invisible to standard dependency scans**
+            - **Difficult to track and update**
+            - **Potential security vulnerabilities**
+            
+            ### 🔧 Recommended Actions
+            1. **Review** the detected libraries and their vulnerabilities
+            2. **Update** to secure versions where possible
+            3. **Consider** migrating to package manager-based dependencies
+            4. **Monitor** for new vulnerabilities in these libraries
+            
+            📥 **Download the full scan report** from the workflow artifacts for detailed vulnerability information.
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+            
+          } catch (error) {
+            console.log('❌ Error processing scan results:', error.message);
+            
+            // Fallback comment
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## ⚠️ Unmanaged JavaScript Vulnerability Scan
+              
+              The scanner detected potential security issues in unmanaged JavaScript libraries.
+              
+              Please check the workflow logs and artifacts for detailed results.`
+            });
+          }
+
+    - name: 🚫 Fail build if high/critical vulnerabilities found
+      if: always()
+      run: |
+        if [ -f "unmanaged-vulnerabilities.json" ]; then
+          HIGH=$(cat unmanaged-vulnerabilities.json | jq -r '.summary.severityCounts.high')
+          CRITICAL=$(cat unmanaged-vulnerabilities.json | jq -r '.summary.severityCounts.critical')
+          
+          if [ "$HIGH" -gt 0 ] || [ "$CRITICAL" -gt 0 ]; then
+            echo "❌ Build failed due to high or critical severity vulnerabilities"
+            echo "High: $HIGH, Critical: $CRITICAL"
+            exit 1
+          else
+            echo "✅ No high or critical vulnerabilities found"
+          fi
+        fi
