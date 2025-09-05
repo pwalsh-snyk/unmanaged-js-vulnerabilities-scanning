@@ -237,23 +237,6 @@ jobs:
           echo "❌ No vulnerability data available for package generation"
         fi
 
-    - name: 🔐 Authenticate with Snyk (if token available)
-      if: always()
-      run: |
-        if [ -n "${{ secrets.SNYK_TOKEN }}" ]; then
-          echo "🔑 Snyk token found, authenticating..."
-          echo "${{ secrets.SNYK_TOKEN }}" | snyk auth --token-from-stdin
-          echo "✅ Authenticated with Snyk"
-        else
-          echo "⚠️  No Snyk token found in secrets (SNYK_TOKEN)"
-          echo "💡 To enable Snyk Web UI integration:"
-          echo "   1. Go to GitHub repo Settings > Secrets and variables > Actions"
-          echo "   2. Add new secret: SNYK_TOKEN with your Snyk API token"
-          echo "   3. Get token from: https://app.snyk.io/account"
-        fi
-      env:
-        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-
     - name: 📦 Install dependencies and generate lock file
       if: always()
       run: |
@@ -291,10 +274,14 @@ jobs:
         
         if [ -n "${{ secrets.SNYK_TOKEN }}" ]; then
           echo "🔑 Authenticating with Snyk..."
-          echo "${{ secrets.SNYK_TOKEN }}" | snyk auth --token-from-stdin
+          snyk auth "${{ secrets.SNYK_TOKEN }}"
           echo "✅ Authenticated with Snyk successfully"
         else
           echo "⚠️  No SNYK_TOKEN found - will run in test-only mode"
+          echo "💡 To enable Snyk Web UI integration:"
+          echo "   1. Go to GitHub repo Settings > Secrets and variables > Actions"
+          echo "   2. Add new repository secret: SNYK_TOKEN with your Snyk API token"
+          echo "   3. Get token from: https://app.snyk.io/account"
         fi
 
     - name: 🔍 Run Snyk scan on generated lock file
