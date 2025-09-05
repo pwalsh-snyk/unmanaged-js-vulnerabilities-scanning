@@ -191,31 +191,43 @@ jobs:
           mkdir -p unmanaged-deps-for-snyk
           cd unmanaged-deps-for-snyk
           
-          # Extract dependencies and create package.json
-          cat ../unmanaged-vulnerabilities.json | jq -r '
+          # First, let's debug what we have in the JSON
+          echo "🔍 Debugging retire.js output..."
+          echo "Data structure:"
+          cat ../unmanaged-vulnerabilities.json | jq '.data[0] | keys' 2>/dev/null || echo "No data found"
+          echo "Results structure:"
+          cat ../unmanaged-vulnerabilities.json | jq '.data[0].results[0] | keys' 2>/dev/null || echo "No results found"
+          
+          # Extract dependencies and create package.json with better error handling
+          cat ../unmanaged-vulnerabilities.json | jq '
+            # Build dependencies object from retire.js results
+            reduce .data[].results[]? as $item (
+              {};
+              if ($item.vulnerabilities and ($item.vulnerabilities | length > 0)) then
+                . + {
+                  ($item.component // $item.npmname): $item.version
+                }
+              else . end
+            ) as $deps |
             {
               "name": "unmanaged-dependencies-detected",
               "version": "1.0.0", 
               "description": "Generated package.json containing unmanaged JavaScript dependencies found in source code",
               "private": true,
-              "dependencies": (
-                [.data[].results[]? | select(.vulnerabilities | length > 0)] |
-                group_by(.component // .npmname) |
-                map({
-                  key: .[0].component // .[0].npmname,
-                  value: .[0].version
-                }) |
-                from_entries
-              ),
+              "dependencies": $deps,
               "_metadata": {
                 "generated_by": "snyk-unmanaged-js-scanner",
                 "source": "retire.js_scan",
-                "detected_libraries": [.data[].results[]? | select(.vulnerabilities | length > 0) | {
-                  name: (.component // .npmname),
-                  version: .version,
-                  vulnerabilities: (.vulnerabilities | length),
-                  file: .file
-                }]
+                "detected_libraries": [
+                  .data[].results[]? | 
+                  select(.vulnerabilities and (.vulnerabilities | length > 0)) | 
+                  {
+                    name: (.component // .npmname),
+                    version: .version,
+                    vulnerabilities: (.vulnerabilities | length),
+                    source_file: .file
+                  }
+                ]
               }
             }
           ' > package.json 2>/dev/null || {
@@ -231,6 +243,18 @@ jobs:
           
           echo "📄 Generated package.json:"
           cat package.json | jq .
+          
+          echo ""
+          echo "🔍 Dependencies extracted:"
+          cat package.json | jq '.dependencies' 2>/dev/null || echo "No dependencies found"
+          
+          echo ""
+          echo "📚 Libraries that should have been found:"
+          cat ../unmanaged-vulnerabilities.json | jq -r '
+            .data[].results[]? | 
+            select(.vulnerabilities and (.vulnerabilities | length > 0)) | 
+            "- " + (.component // .npmname // "UNKNOWN") + " v" + (.version // "UNKNOWN") + " (" + (.vulnerabilities | length | tostring) + " vulns)"
+          ' 2>/dev/null || echo "Error parsing vulnerable libraries"
           
           cd ..
         else
