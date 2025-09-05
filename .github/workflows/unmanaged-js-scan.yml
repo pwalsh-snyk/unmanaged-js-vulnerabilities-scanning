@@ -198,39 +198,14 @@ jobs:
           echo "Results structure:"
           cat ../unmanaged-vulnerabilities.json | jq '.data[0].results[0] | keys' 2>/dev/null || echo "No results found"
           
-          # Extract dependencies and create package.json with better error handling
-          cat ../unmanaged-vulnerabilities.json | jq '
-            # Build dependencies object from retire.js results
-            reduce .data[].results[]? as $item (
-              {};
-              if ($item.vulnerabilities and ($item.vulnerabilities | length > 0)) then
-                . + {
-                  ($item.component // $item.npmname): $item.version
-                }
-              else . end
-            ) as $deps |
-            {
-              "name": "unmanaged-dependencies-detected",
-              "version": "1.0.0", 
-              "description": "Generated package.json containing unmanaged JavaScript dependencies found in source code",
-              "private": true,
-              "dependencies": $deps,
-              "_metadata": {
-                "generated_by": "snyk-unmanaged-js-scanner",
-                "source": "retire.js_scan",
-                "detected_libraries": [
-                  .data[].results[]? | 
-                  select(.vulnerabilities and (.vulnerabilities | length > 0)) | 
-                  {
-                    name: (.component // .npmname),
-                    version: .version,
-                    vulnerabilities: (.vulnerabilities | length),
-                    source_file: .file
-                  }
-                ]
-              }
-            }
-          ' > package.json 2>/dev/null || {
+          # Extract vulnerable libraries directly from the known structure
+          cat ../unmanaged-vulnerabilities.json | jq '{
+            "name": "unmanaged-dependencies-detected",
+            "version": "1.0.0", 
+            "description": "Generated package.json containing unmanaged JavaScript dependencies found in source code",
+            "private": true,
+            "dependencies": (.data[] | .results[] | select(.vulnerabilities | length > 0) | {(.component): .version}) | add // {}
+          }' > package.json 2>/dev/null || {
             echo "Error generating package.json, creating fallback..."
             echo '{
               "name": "unmanaged-dependencies-detected",
@@ -361,13 +336,13 @@ jobs:
           
           echo "🌐 Sending results to Snyk Web UI with snyk monitor..."
           
-          # Send to Snyk Web UI
+          # Send to Snyk Web UI - simple approach per Snyk docs
           snyk monitor \
             --project-name="Unmanaged JavaScript Dependencies - $(date +'%Y-%m-%d %H:%M')" \
-            --project-tags="unmanaged-deps,retire-js-scan,demo,auto-generated" \
+            --project-tags="type=unmanaged-deps,source=retire-js-scan,purpose=demo" \
             --remote-repo-url="${{ github.server_url }}/${{ github.repository }}" \
             --target-reference="${{ github.ref_name }}" \
-            2>&1 || echo "Monitor command completed with warnings"
+            || echo "Monitor command completed"
           
           echo ""
           echo "🎉 SUCCESS: Unmanaged dependencies sent to Snyk Web UI!"
